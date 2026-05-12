@@ -1,13 +1,25 @@
 # CardCounter - Festifoll 2026 🎡
 
+⚠️ **PROJET ABANDONNÉ DANS SON ÉTAT ACTUEL** ⚠️  
+Le projet est officiellement délaissé par son auteur d'origine. La propriété du dépôt et la maintenance peuvent être transférées à toute personne intéressée. Contactez-moi par issue ou transfert direct.
+
 Outil de comptage rapide par scan de codes pour l'édition **Festi'Foll 2026**.
 
 ## 🚀 Fonctionnalités
-- **Scan Ultra-Rapide** : Optimisé pour les lecteurs de codes-barres.
-- **Validation Auto** : Traite les codes par lots de 6 caractères.
+
+### ✅ Fonctionnelles
+- **Saisie Clavier Ultra-Rapide** : Optimisée pour les lecteurs de codes-barres émulant un clavier.
+- **Validation Auto** : Traite les codes par lots de 6 caractères (ex: `032860`).
 - **Base de Données** : Stockage local SQLite (`codes.db`).
+- **Interface GPU** : UI performante construite avec GPUI 0.2.2.
 - **Mode Reset** : Bouton de réinitialisation sécurisé avec confirmation.
-- **0 friction garantie à l'usage** : 
+
+### 🚧 WIP / Expérimental (Abstrait)
+- **Scanner Caméra (Beta)** : Intégration de `nokhwa` et `rxing` pour le scan direct via webcam.
+  - Stream vidéo ~15 FPS.
+  - HUD avec overlay assombri et zone cible pour faciliter le focus.
+  - Support Code 128, EAN-13, et Interleaved 2 of 5 (ITF).
+  - *Note : Le décodage ITF est actuellement capricieux sur certains matériels.*
 
 ## 🛠 Installation / Utilisation
 

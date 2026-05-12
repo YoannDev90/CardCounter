@@ -7,6 +7,7 @@ pub enum AppMode {
     Interactive,
 }
 
+#[derive(Clone)]
 pub struct ScanThrottle {
     pub last_scan: Instant,
     pub last_code: String,

@@ -3,12 +3,12 @@ use gpui::*;
 use std::sync::Arc;
 
 mod db;
-mod types;
 mod scanner;
+mod types;
 
 use db::Db;
-use types::AppMode;
 use scanner::Scanner;
+use types::AppMode;
 
 struct CardCounter {
     db: Arc<Db>,
@@ -19,11 +19,13 @@ struct CardCounter {
     show_reset_confirm: bool,
     mode: AppMode,
     camera_frame: Option<ImageSource>,
+    _scanner_task: Option<Task<()>>,
 }
 
 impl CardCounter {
     fn new(db: Arc<Db>, cx: &mut Context<Self>) -> Self {
-        let view = Self {
+        println!("[MAIN] Initialisation de CardCounter...");
+        let mut view = Self {
             db,
             current_input: String::new(),
             last_result: None,
@@ -32,9 +34,11 @@ impl CardCounter {
             show_reset_confirm: false,
             mode: AppMode::Interactive,
             camera_frame: None,
+            _scanner_task: None,
         };
 
-        Scanner::start(
+        println!("[MAIN] Lancement du Scanner...");
+        let task = Scanner::start(
             cx.entity().downgrade(),
             cx,
             |v| v.mode,
@@ -44,6 +48,8 @@ impl CardCounter {
                 cx.notify();
             },
         );
+        view._scanner_task = Some(task);
+        println!("[MAIN] Scanner::start appelé avec succès, tâche stockée");
         view
     }
 
@@ -149,11 +155,18 @@ impl Render for CardCounter {
                                     .px_4()
                                     .py_2()
                                     .rounded_lg()
-                                    .bg(if self.mode == AppMode::Manual { rgb(0x444444) } else { rgb(0x1e1e1e) })
+                                    .bg(if self.mode == AppMode::Manual {
+                                        rgb(0x444444)
+                                    } else {
+                                        rgb(0x1e1e1e)
+                                    })
                                     .text_color(rgb(0xffffff))
-                                    .on_mouse_down(MouseButton::Left, cx.listener(|this, _, _, cx| {
-                                        this.set_mode(AppMode::Manual, cx);
-                                    }))
+                                    .on_mouse_down(
+                                        MouseButton::Left,
+                                        cx.listener(|this, _, _, cx| {
+                                            this.set_mode(AppMode::Manual, cx);
+                                        }),
+                                    )
                                     .child("⌨️ CLAVIER"),
                             )
                             .child(
@@ -161,11 +174,18 @@ impl Render for CardCounter {
                                     .px_4()
                                     .py_2()
                                     .rounded_lg()
-                                    .bg(if self.mode == AppMode::Interactive { rgb(0x444444) } else { rgb(0x1e1e1e) })
+                                    .bg(if self.mode == AppMode::Interactive {
+                                        rgb(0x444444)
+                                    } else {
+                                        rgb(0x1e1e1e)
+                                    })
                                     .text_color(rgb(0xffffff))
-                                    .on_mouse_down(MouseButton::Left, cx.listener(|this, _, _, cx| {
-                                        this.set_mode(AppMode::Interactive, cx);
-                                    }))
+                                    .on_mouse_down(
+                                        MouseButton::Left,
+                                        cx.listener(|this, _, _, cx| {
+                                            this.set_mode(AppMode::Interactive, cx);
+                                        }),
+                                    )
                                     .child("📷 WEBCAM"),
                             ),
                     ),
@@ -184,9 +204,49 @@ impl Render for CardCounter {
                                 .absolute()
                                 .size_full()
                                 .child(match &self.camera_frame {
-                                    Some(src) => (img(src.clone()).size_full().object_fit(ObjectFit::Cover)).into_any_element(),
-                                    None => (div().size_full().bg(rgb(0x1a1a1a))).into_any_element(),
-                                })
+                                    Some(src) => {
+                                        div()
+                                            .size_full()
+                                            .child(
+                                                img(src.clone())
+                                                    .size_full()
+                                                    .object_fit(ObjectFit::Cover),
+                                            )
+                                            // Viseur plein écran amélioré (Overlay assombri avec trou central)
+                                            .child(
+                                                div()
+                                                    .absolute()
+                                                    .size_full()
+                                                    .flex()
+                                                    .items_center()
+                                                    .justify_center()
+                                                    .bg(rgba(0x00000099)) // Fond assombri global
+                                                    .child(
+                                                        div()
+                                                            .w(px(400.0))
+                                                            .h(px(200.0))
+                                                            .border_2()
+                                                            .border_color(rgb(0xffffff))
+                                                            .bg(rgba(0xffffff11)) // Zone cible légèrement plus claire
+                                                            .flex()
+                                                            .items_center()
+                                                            .justify_center()
+                                                            .child(
+                                                                div()
+                                                                    .text_sm()
+                                                                    .text_color(rgb(0xffffff))
+                                                                    .child(
+                                                                        "PLACER LE CODE-BARRES ICI",
+                                                                    ),
+                                                            ),
+                                                    ),
+                                            )
+                                            .into_any_element()
+                                    }
+                                    None => {
+                                        (div().size_full().bg(rgb(0x1a1a1a))).into_any_element()
+                                    }
+                                }),
                         )
                     })
                     .child(
@@ -197,7 +257,13 @@ impl Render for CardCounter {
                             .flex()
                             .flex_col()
                             .items_center()
-                            .child(div().text_3xl().font_weight(FontWeight::BOLD).child(status).text_color(color))
+                            .child(
+                                div()
+                                    .text_3xl()
+                                    .font_weight(FontWeight::BOLD)
+                                    .child(status)
+                                    .text_color(color),
+                            )
                             .child(
                                 div()
                                     .mt_4()
@@ -212,27 +278,23 @@ impl Render for CardCounter {
                                         .mt_6()
                                         .text_2xl()
                                         .text_color(rgb(0x888888))
-                                        .child(format!("Saisie: {}", self.current_input))
+                                        .child(format!("Saisie: {}", self.current_input)),
                                 )
-                            })
-                    )
+                            }),
+                    ),
             )
             .child(
-                div()
-                    .absolute()
-                    .bottom_4()
-                    .right_4()
-                    .child(
-                        div()
-                            .px_3()
-                            .py_1()
-                            .text_sm()
-                            .bg(rgba(0x1a1a1a88))
-                            .text_color(rgb(0x884444))
-                            .rounded_md()
-                            .on_mouse_down(MouseButton::Left, cx.listener(Self::toggle_reset_confirm))
-                            .child("RESET"),
-                    ),
+                div().absolute().bottom_4().right_4().child(
+                    div()
+                        .px_3()
+                        .py_1()
+                        .text_sm()
+                        .bg(rgba(0x1a1a1a88))
+                        .text_color(rgb(0x884444))
+                        .rounded_md()
+                        .on_mouse_down(MouseButton::Left, cx.listener(Self::toggle_reset_confirm))
+                        .child("RESET"),
+                ),
             )
             .when(self.show_reset_confirm, |this| {
                 this.child(
@@ -264,7 +326,10 @@ impl Render for CardCounter {
                                                 .py_2()
                                                 .bg(rgb(0xbb2222))
                                                 .rounded_md()
-                                                .on_mouse_down(MouseButton::Left, cx.listener(Self::confirm_reset))
+                                                .on_mouse_down(
+                                                    MouseButton::Left,
+                                                    cx.listener(Self::confirm_reset),
+                                                )
                                                 .child("OUI"),
                                         )
                                         .child(
@@ -273,7 +338,10 @@ impl Render for CardCounter {
                                                 .py_2()
                                                 .bg(rgb(0x444444))
                                                 .rounded_md()
-                                                .on_mouse_down(MouseButton::Left, cx.listener(Self::toggle_reset_confirm))
+                                                .on_mouse_down(
+                                                    MouseButton::Left,
+                                                    cx.listener(Self::toggle_reset_confirm),
+                                                )
                                                 .child("NON"),
                                         ),
                                 ),
@@ -284,13 +352,20 @@ impl Render for CardCounter {
 }
 
 fn main() {
+    println!("[MAIN] Lancement du processus d'application...");
     Application::new().run(|cx: &mut App| {
+        println!("[MAIN] Application::new().run(...) callback");
         let db = Arc::new(Db::init().expect("Erreur DB"));
+        println!("[MAIN] DB initialisée");
+
         cx.open_window(WindowOptions::default(), move |window, cx| {
+            println!("[MAIN] cx.open_window(...) callback");
             let view = cx.new(|cx| CardCounter::new(db, cx));
+            println!("[MAIN] Vue CardCounter créée, focus du window");
             view.focus_handle(cx).focus(window);
             view
         })
         .expect("Erreur ouverture fenêtre");
+        println!("[MAIN] Fenêtre ouverte et thread principal en cours");
     });
 }

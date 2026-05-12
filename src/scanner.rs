@@ -1,6 +1,7 @@
 use gpui::*;
-use masuri::{decode_parallel, SymbolType};
+use rxing::{common::HybridBinarizer, BinaryBitmap, MultiUseMultiFormatReader, Reader, DecodingHintDictionary, DecodeHintValue, DecodeHintType, BarcodeFormat};
 use nokhwa::pixel_format::RgbFormat;
+use std::collections::HashSet;
 use nokhwa::utils::{CameraIndex, RequestedFormat, RequestedFormatType};
 use nokhwa::Camera;
 use std::sync::Arc;
@@ -17,121 +18,182 @@ impl Scanner {
         mode_check: impl Fn(&T) -> AppMode + Send + Sync + 'static,
         handle_data: impl Fn(&mut T, &str, &mut Context<T>) + Send + Sync + 'static,
         update_frame: impl Fn(&mut T, ImageSource, &mut Context<T>) + Send + Sync + 'static,
-    ) {
-        cx.spawn(|_this: WeakEntity<T>, cx_ref: &mut AsyncApp| {
+    ) -> Task<()> {
+        let handle_data = Arc::new(handle_data);
+        println!("[DEBUG] Appels Scanner::start - Tentative spawn");
+        let task = cx.spawn(|_this: WeakEntity<T>, cx_ref: &mut AsyncApp| {
+            println!("[DEBUG] Entrée dans la closure de spawn (sur thread worker)");
             let cx = cx_ref.clone();
-            let this = weak_handle;
             let mut throttle = ScanThrottle::new();
+            let this = weak_handle;
             
             async move {
+                println!("[SCANNER] Tâche asynchrone lancée via async move");
+                
+                let mut loop_count = 0u64;
+                println!("[SCANNER] Enumération des caméras...");
+                match nokhwa::query(nokhwa::utils::ApiBackend::Auto) {
+                    Ok(devices) => {
+                        println!("[SCANNER] {} caméras trouvées", devices.len());
+                        for dev in devices {
+                            println!("[SCANNER] Caméra: {}", dev.human_name());
+                        }
+                    }
+                    Err(e) => println!("[SCANNER] Erreur énumération: {:?}", e),
+                }
+
                 let index = CameraIndex::Index(0);
+                // On repasse en mode automatique le plus fluide mais on va tenter de stabiliser
                 let requested = RequestedFormat::new::<RgbFormat>(
                     RequestedFormatType::AbsoluteHighestFrameRate,
                 );
                 
+                println!("[SCANNER] Tentative de création de la caméra (mode auto)...");
                 let mut camera = match Camera::new(index, requested) {
-                    Ok(c) => c,
-                    Err(_) => return,
+                    Ok(c) => {
+                        println!("[SCANNER] Instance caméra créée.");
+                        c
+                    },
+                    Err(e) => {
+                        eprintln!("[SCANNER] Erreur critique Camera::new: {:?}", e);
+                        return;
+                    }
                 };
 
-                if camera.open_stream().is_err() {
+                println!("[SCANNER] Ouverture du stream...");
+                if let Err(e) = camera.open_stream() {
+                    eprintln!("[SCANNER] Erreur critique open_stream: {:?}", e);
                     return;
                 }
+                println!("[SCANNER] Stream ouvert ! La LED de la caméra devrait s'allumer.");
 
-                // Buffer de Gray pour le décodage barcode pour éviter les réallocations
-                let mut gray_pixels = Vec::new();
-                let mut rgba_data = Vec::new();
+                let mut frame_count = 0u64;
+                let mut last_fps_check = Instant::now();
+                let mut fps = 0.0;
 
                 loop {
+                    loop_count += 1;
+                    
+                    // Calcul des FPS toutes les secondes
+                    let now = Instant::now();
+                    let elapsed = now.duration_since(last_fps_check);
+                    if elapsed >= Duration::from_secs(1) {
+                        fps = frame_count as f64 / elapsed.as_secs_f64();
+                        println!("[SCANNER] FPS: {:.1} | Itération #{}", fps, loop_count);
+                        frame_count = 0;
+                        last_fps_check = now;
+                    }
+
                     let mut is_interactive = false;
-                    let _ = this.upgrade().map(|view: Entity<T>| {
-                        if let Ok(m) = view.read_with(&cx, |v, _| mode_check(v)) {
-                            is_interactive = m == AppMode::Interactive;
-                        }
-                    });
+                    if let Some(view) = this.upgrade() {
+                        let _ = cx.update(|cx| {
+                            is_interactive = mode_check(view.read(cx)) == AppMode::Interactive;
+                        });
+                    }
 
                     if is_interactive {
-                        if let Ok(frame) = camera.frame() {
-                            if let Ok(decoded_frame) = frame.decode_image::<RgbFormat>() {
-                                let width = decoded_frame.width();
-                                let height = decoded_frame.height();
-                                let total_pixels = (width * height) as usize;
-                                
-                                // Réutilisation des buffers
-                                rgba_data.clear();
-                                rgba_data.reserve(total_pixels * 4);
-                                gray_pixels.clear();
-                                gray_pixels.reserve(total_pixels);
+                        // Cruciaux : On cède la main à l'exécuteur GPUI pour éviter de bloquer le thread worker
+                        // et on laisse le temps au thread principal de traiter les cx.update
+                        smol::Timer::after(Duration::from_millis(1)).await;
 
-                                // Une seule boucle pour RGBA et Gray
-                                for p in decoded_frame.pixels() {
-                                    let r = p.0[0];
-                                    let g = p.0[1];
-                                    let b = p.0[2];
-                                    
-                                    rgba_data.push(r);
-                                    rgba_data.push(g);
-                                    rgba_data.push(b);
-                                    rgba_data.push(255);
-                                    
-                                    // Luminance (Luma Y' pour rapidité)
-                                    gray_pixels.push(((r as u32 + g as u32 + b as u32) / 3) as u8);
+                        match camera.frame() {
+                            Ok(frame) => {
+                                frame_count += 1;
+                                if frame_count % 100 == 0 {
+                                    println!("[SCANNER] Capture frame #{}", frame_count);
                                 }
 
-                                // Création de la frame GPUI
-                                if let Some(buf) = ImageBuffer::from_raw(width, height, rgba_data.clone()) {
-                                    let frame = Frame::new(buf);
-                                    let render_img = Arc::new(RenderImage::new(vec![frame]));
-                                    let src = ImageSource::Render(render_img);
+                                if let Ok(decoded_frame) = frame.decode_image::<RgbFormat>() {
+                                    let width = decoded_frame.width();
+                                    let height = decoded_frame.height();
+                                    
+                                    let mut rgba_data = Vec::with_capacity((width * height * 4) as usize);
+                                    let mut gray_pixels = Vec::with_capacity((width * height) as usize);
 
-                                    // Mise à jour UI Immédiate
-                                    let _ = this.upgrade().map(|view| {
-                                        let _ = cx.update(|cx| {
-                                            let _ = view.update(cx, |v, cx| {
-                                                update_frame(v, src, cx);
-                                            });
-                                            Ok::<(), ()>(())
-                                        });
-                                    });
-                                }
+                                    for p in decoded_frame.pixels() {
+                                        // Conversion BGR -> RGBA pour GPUI (nokhwa renvoie souvent du BGR par défaut sur Linux/V4L2)
+                                        rgba_data.push(p.0[2]); // R (index 2)
+                                        rgba_data.push(p.0[1]); // G (index 1)
+                                        rgba_data.push(p.0[0]); // B (index 0)
+                                        rgba_data.push(255);
+                                        // Grayscale pour masuri
+                                        gray_pixels.push(((p.0[0] as u32 + p.0[1] as u32 + p.0[2] as u32) / 3) as u8);
+                                    }
 
-                                // Décodage en parallèle (Asynchrone par rapport à l'affichage)
-                                let results = decode_parallel(&gray_pixels, width, height);
+                                    if let Some(buf) = ImageBuffer::<Rgba<u8>, Vec<u8>>::from_raw(width, height, rgba_data) {
+                                        let frame_obj = Frame::new(buf);
+                                        let render_img = Arc::new(RenderImage::new(vec![frame_obj]));
+                                        let src = ImageSource::Render(render_img);
 
-                                for result in results {
-                                    if result.sym_type == SymbolType::Code128 {
-                                        let code = result.data.trim().to_string();
-                                        let now = Instant::now();
-                                        
-                                        let can_scan = if code == throttle.last_code {
-                                            now.duration_since(throttle.last_scan) > Duration::from_secs(2)
-                                        } else {
-                                            true
-                                        };
-
-                                        if can_scan {
-                                            throttle.last_code = code.clone();
-                                            throttle.last_scan = now;
-                                            
-                                            let _ = this.upgrade().map(|view| {
-                                                let _ = cx.update(|cx| {
-                                                    let _ = view.update(cx, |v, cx| {
-                                                        handle_data(v, &code, cx);
-                                                    });
-                                                    Ok::<(), ()>(())
+                                        if let Some(view) = this.upgrade() {
+                                            let _ = cx.update(|cx| {
+                                                let _ = view.update(cx, |v, cx| {
+                                                    update_frame(v, src, cx);
                                                 });
                                             });
+                                        }
+
+                                        // Décodage parallélisé pour ne pas laguer la preview
+                                        if frame_count % 3 == 0 {
+                                            let gray_for_decode = gray_pixels.clone();
+                                            let last_code = throttle.last_code.clone();
+                                            let last_scan = throttle.last_scan;
+                                            
+                                            // Clones pour le spawn
+                                            let view_clone = this.clone();
+                                            let cx_clone = cx.clone();
+                                            let handle_data_clone = handle_data.clone();
+
+                                            cx.foreground_executor()
+                                                .spawn(async move {
+                                                    let mut hints = DecodingHintDictionary::new();
+                                                    let mut formats = HashSet::new();
+                                                    formats.insert(BarcodeFormat::ITF);
+                                                    formats.insert(BarcodeFormat::CODE_128);
+                                                    formats.insert(BarcodeFormat::EAN_13);
+
+                                                    hints.insert(DecodeHintType::POSSIBLE_FORMATS, DecodeHintValue::PossibleFormats(formats));
+                                                    hints.insert(DecodeHintType::TRY_HARDER, DecodeHintValue::TryHarder(true));
+
+                                                    let mut reader = MultiUseMultiFormatReader::default();
+                                                    let luma_source = rxing::Luma8LuminanceSource::new(gray_for_decode, width, height);
+                                                    let binarizer = HybridBinarizer::new(luma_source);
+                                                    let mut bitmap = BinaryBitmap::new(binarizer);
+
+                                                    if let Ok(result) = reader.decode_with_hints(&mut bitmap, &hints) {
+                                                        let code = result.getText().trim().to_string();
+                                                        
+                                                        if !code.is_empty() {
+                                                            let now = Instant::now();
+                                                            if code != last_code || now.duration_since(last_scan) > Duration::from_secs(2) {
+                                                                println!("[SCANNER] Détecté via RXing: {} ({:?})", code, result.getBarcodeFormat());
+                                                                let _ = cx_clone.update(|cx| {
+                                                                    if let Some(view) = view_clone.upgrade() {
+                                                                        let _ = view.update(cx, |v, cx| {
+                                                                            handle_data_clone(v, &code, cx);
+                                                                        });
+                                                                    }
+                                                                });
+                                                            }
+                                                        }
+                                                    }
+                                                })
+                                                .detach();
                                         }
                                     }
                                 }
                             }
+                            Err(e) => {
+                                eprintln!("[SCANNER] Erreur frame: {:?}", e);
+                                smol::Timer::after(Duration::from_millis(100)).await;
+                            }
                         }
                     } else {
-                        // Très courte attente si en mode manuel pour libérer le CPU
                         smol::Timer::after(Duration::from_millis(100)).await;
                     }
                 }
             }
         });
+        task
     }
 }
