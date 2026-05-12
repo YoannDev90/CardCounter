@@ -178,48 +178,44 @@ impl Render for CardCounter {
                     .items_center()
                     .justify_center()
                     .w_full()
-                    .child(div().text_3xl().font_weight(FontWeight::BOLD).child(status).text_color(color))
-                    .child(
-                        div()
-                            .mt_8()
-                            .text_3xl()
-                            .text_color(rgb(0xffffff))
-                            .bg(rgb(0x000000))
-                            .px_10()
-                            .py_6()
-                            .rounded_xl()
-                            .child(self.last_code.clone()),
-                    )
                     .when(self.mode == AppMode::Interactive, |parent| {
                         parent.child(
                             div()
-                                .mt_8()
-                                .size_64()
-                                .bg(rgb(0x000000))
-                                .rounded_lg()
-                                .overflow_hidden()
+                                .absolute()
+                                .size_full()
                                 .child(match &self.camera_frame {
-                                    Some(src) => div().size_full().child(img(src.clone()).size_full()),
-                                    None => div()
-                                        .size_full()
-                                        .flex()
-                                        .items_center()
-                                        .justify_center()
-                                        .text_color(rgb(0x888888))
-                                        .child("Caméra..."),
-                                }),
+                                    Some(src) => (img(src.clone()).size_full().object_fit(ObjectFit::Cover)).into_any_element(),
+                                    None => (div().size_full().bg(rgb(0x1a1a1a))).into_any_element(),
+                                })
                         )
                     })
-                    .when(self.mode == AppMode::Manual, |parent| {
-                        parent.child(
-                            div()
-                                .mt_12()
-                                .flex()
-                                .gap_4()
-                                .child(div().text_2xl().text_color(rgb(0xcccccc)).child("Saisie:"))
-                                .child(div().text_2xl().text_color(rgb(0xffffff)).child(self.current_input.clone())),
-                        )
-                    }),
+                    .child(
+                        div()
+                            .bg(rgba(0x000000aa))
+                            .p_10()
+                            .rounded_xl()
+                            .flex()
+                            .flex_col()
+                            .items_center()
+                            .child(div().text_3xl().font_weight(FontWeight::BOLD).child(status).text_color(color))
+                            .child(
+                                div()
+                                    .mt_4()
+                                    .text_3xl()
+                                    .font_weight(FontWeight::BOLD)
+                                    .text_color(rgb(0xffffff))
+                                    .child(self.last_code.clone()),
+                            )
+                            .when(self.mode == AppMode::Manual, |parent| {
+                                parent.child(
+                                    div()
+                                        .mt_6()
+                                        .text_2xl()
+                                        .text_color(rgb(0x888888))
+                                        .child(format!("Saisie: {}", self.current_input))
+                                )
+                            })
+                    )
             )
             .child(
                 div()
@@ -228,13 +224,14 @@ impl Render for CardCounter {
                     .right_4()
                     .child(
                         div()
-                            .px_4()
-                            .py_2()
-                            .bg(rgb(0x1a1a1a))
-                            .text_color(rgb(0xff4444))
-                            .rounded_lg()
+                            .px_3()
+                            .py_1()
+                            .text_sm()
+                            .bg(rgba(0x1a1a1a88))
+                            .text_color(rgb(0x884444))
+                            .rounded_md()
                             .on_mouse_down(MouseButton::Left, cx.listener(Self::toggle_reset_confirm))
-                            .child("RESET DATA"),
+                            .child("RESET"),
                     ),
             )
             .when(self.show_reset_confirm, |this| {
@@ -242,7 +239,7 @@ impl Render for CardCounter {
                     div()
                         .absolute()
                         .size_full()
-                        .bg(rgba(0x000000))
+                        .bg(rgba(0x000000ee))
                         .flex()
                         .flex_col()
                         .items_center()
