@@ -19,7 +19,7 @@ impl Scanner {
         update_frame: impl Fn(&mut T, ImageSource, &mut Context<T>) + Send + Sync + 'static,
     ) {
         cx.spawn(|_this: WeakEntity<T>, cx_ref: &mut AsyncApp| {
-            let mut cx = cx_ref.clone();
+            let cx = cx_ref.clone();
             let this = weak_handle;
             let mut throttle = ScanThrottle::new();
             
@@ -28,6 +28,7 @@ impl Scanner {
                 let requested = RequestedFormat::new::<RgbFormat>(
                     RequestedFormatType::AbsoluteHighestFrameRate,
                 );
+                
                 let mut camera = match Camera::new(index, requested) {
                     Ok(c) => c,
                     Err(_) => return,
@@ -36,6 +37,10 @@ impl Scanner {
                 if camera.open_stream().is_err() {
                     return;
                 }
+
+                // Buffer de Gray pour le décodage barcode pour éviter les réallocations
+                let mut gray_pixels = Vec::new();
+                let mut rgba_data = Vec::new();
 
                 loop {
                     let mut is_interactive = false;
@@ -50,48 +55,54 @@ impl Scanner {
                             if let Ok(decoded_frame) = frame.decode_image::<RgbFormat>() {
                                 let width = decoded_frame.width();
                                 let height = decoded_frame.height();
+                                let total_pixels = (width * height) as usize;
                                 
-                                // Direct conversion to RGBA for GPUI
-                                let mut rgba_data = Vec::with_capacity((width * height * 4) as usize);
+                                // Réutilisation des buffers
+                                rgba_data.clear();
+                                rgba_data.reserve(total_pixels * 4);
+                                gray_pixels.clear();
+                                gray_pixels.reserve(total_pixels);
+
+                                // Une seule boucle pour RGBA et Gray
                                 for p in decoded_frame.pixels() {
-                                    rgba_data.push(p.0[0]);
-                                    rgba_data.push(p.0[1]);
-                                    rgba_data.push(p.0[2]);
+                                    let r = p.0[0];
+                                    let g = p.0[1];
+                                    let b = p.0[2];
+                                    
+                                    rgba_data.push(r);
+                                    rgba_data.push(g);
+                                    rgba_data.push(b);
                                     rgba_data.push(255);
+                                    
+                                    // Luminance (Luma Y' pour rapidité)
+                                    gray_pixels.push(((r as u32 + g as u32 + b as u32) / 3) as u8);
                                 }
 
-                                // Decode Barcode (Gray)
-                                let gray_pixels: Vec<u8> = decoded_frame
-                                    .pixels()
-                                    .map(|p| (p.0[0] as u32 + p.0[1] as u32 + p.0[2] as u32) / 3)
-                                    .map(|v| v as u8)
-                                    .collect();
+                                // Création de la frame GPUI
+                                if let Some(buf) = ImageBuffer::from_raw(width, height, rgba_data.clone()) {
+                                    let frame = Frame::new(buf);
+                                    let render_img = Arc::new(RenderImage::new(vec![frame]));
+                                    let src = ImageSource::Render(render_img);
 
-                                let results = decode_parallel(&gray_pixels, width, height);
-
-                                let buf: ImageBuffer<Rgba<u8>, Vec<u8>> = ImageBuffer::from_raw(width, height, rgba_data).unwrap();
-                                let frame = Frame::new(buf);
-                                let render_img = Arc::new(RenderImage::new(vec![frame]));
-                                let src = ImageSource::Render(render_img);
-
-                                // Update UI ASAP for high framerate
-                                let _ = this.upgrade().map(|view: Entity<T>| {
-                                    let _ = cx.update(|cx| {
-                                        let _ = view.update(cx, |v: &mut T, cx| {
-                                            update_frame(v, src, cx);
+                                    // Mise à jour UI Immédiate
+                                    let _ = this.upgrade().map(|view| {
+                                        let _ = cx.update(|cx| {
+                                            let _ = view.update(cx, |v, cx| {
+                                                update_frame(v, src, cx);
+                                            });
+                                            Ok::<(), ()>(())
                                         });
-                                        Ok::<(), ()>(())
                                     });
-                                });
+                                }
+
+                                // Décodage en parallèle (Asynchrone par rapport à l'affichage)
+                                let results = decode_parallel(&gray_pixels, width, height);
 
                                 for result in results {
                                     if result.sym_type == SymbolType::Code128 {
                                         let code = result.data.trim().to_string();
-                                        
-                                        // "Delicate" Antiflicker:
-                                        // 1. Same code -> wait at least 2s
-                                        // 2. Different code -> immediate scan allowed
                                         let now = Instant::now();
+                                        
                                         let can_scan = if code == throttle.last_code {
                                             now.duration_since(throttle.last_scan) > Duration::from_secs(2)
                                         } else {
@@ -102,9 +113,9 @@ impl Scanner {
                                             throttle.last_code = code.clone();
                                             throttle.last_scan = now;
                                             
-                                            let _ = this.upgrade().map(|view: Entity<T>| {
+                                            let _ = this.upgrade().map(|view| {
                                                 let _ = cx.update(|cx| {
-                                                    let _ = view.update(cx, |v: &mut T, cx| {
+                                                    let _ = view.update(cx, |v, cx| {
                                                         handle_data(v, &code, cx);
                                                     });
                                                     Ok::<(), ()>(())
@@ -116,13 +127,11 @@ impl Scanner {
                             }
                         }
                     } else {
+                        // Très courte attente si en mode manuel pour libérer le CPU
                         smol::Timer::after(Duration::from_millis(100)).await;
                     }
-                    // Yield quickly for higher FPS
-                    smol::future::yield_now().await;
                 }
             }
-        })
-        .detach();
+        });
     }
 }
