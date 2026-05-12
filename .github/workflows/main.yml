@@ -28,19 +28,18 @@ jobs:
 
             - name: Build Release
               run: cargo build --release
-              working-directory: card-counter
 
             - name: Prepare Artifacts (Linux)
               if: matrix.os == 'ubuntu-latest'
               run: |
-                  cd card-counter/target/release
-                  tar -czvf ../../../card-counter-linux.tar.gz card-counter
+                  cd target/release
+                  tar -czvf ../../card-counter-linux.tar.gz card-counter
 
             - name: Prepare Artifacts (Windows)
               if: matrix.os == 'windows-latest'
               run: |
-                  cd card-counter/target/release
-                  compress-archive -Path card-counter.exe -DestinationPath ../../../card-counter-windows.zip
+                  cd target/release
+                  Compress-Archive -Path card-counter.exe -DestinationPath ../../card-counter-windows.zip
 
             - name: Create Release
               uses: softprops/action-gh-release@v1
