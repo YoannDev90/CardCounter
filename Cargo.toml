@@ -1,12 +1,12 @@
 [package]
 name = "card-counter"
 version = "0.1.0"
-edition = "2024"
+edition = "2026"
 
 [dependencies]
 gpui = "0.2.2"
 rfd = "0.17.2"
-rusqlite = "0.39.0"
+rusqlite = { version = "0.39.0", features = ["bundled"] }
 serde = { version = "1.0.228", features = ["derive"] }
 tokio = { version = "1.52.3", features = ["full"] }
 
