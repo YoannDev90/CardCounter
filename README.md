@@ -1,12 +1,13 @@
 # CardCounter - Festifoll 2026 🎡
 
-Outil de comptage rapide par scan de codes pour l'édition **Festifoll 2026**.
+Outil de comptage rapide par scan de codes pour l'édition **Festi'Foll 2026**.
 
 ## 🚀 Fonctionnalités
-- **Scan Ultra-Rapide** : Optimisé pour les lecteurs de codes-barres (entrée clavier série).
+- **Scan Ultra-Rapide** : Optimisé pour les lecteurs de codes-barres.
 - **Validation Auto** : Traite les codes par lots de 6 caractères.
 - **Base de Données** : Stockage local SQLite (`codes.db`).
 - **Mode Reset** : Bouton de réinitialisation sécurisé avec confirmation.
+- **0 friction garantie à l'usage** : 
 
 ## 🛠 Installation / Utilisation
 

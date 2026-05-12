@@ -5,9 +5,14 @@ edition = "2024"
 
 [dependencies]
 gpui = "0.2.2"
+image = "0.25.10"
+masuri = "0.1.2"
+nokhwa = { version = "0.10.10", features = ["input-native"] }
 rfd = "0.17.2"
 rusqlite = { version = "0.39.0", features = ["bundled"] }
 serde = { version = "1.0.228", features = ["derive"] }
+smol = "2.0.2"
+smol-timeout = "0.6.1"
 tokio = { version = "1.52.3", features = ["full"] }
 
 [dev-dependencies]

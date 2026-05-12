@@ -1,10 +1,14 @@
-#![recursion_limit = "1024"]
 use gpui::prelude::*;
 use gpui::*;
 use std::sync::Arc;
 
 mod db;
+mod types;
+mod scanner;
+
 use db::Db;
+use types::AppMode;
+use scanner::Scanner;
 
 struct CardCounter {
     db: Arc<Db>,
@@ -13,26 +17,49 @@ struct CardCounter {
     last_code: String,
     focus_handle: FocusHandle,
     show_reset_confirm: bool,
+    mode: AppMode,
+    camera_frame: Option<ImageSource>,
 }
 
 impl CardCounter {
     fn new(db: Arc<Db>, cx: &mut Context<Self>) -> Self {
-        Self {
+        let view = Self {
             db,
             current_input: String::new(),
             last_result: None,
             last_code: String::from("------"),
             focus_handle: cx.focus_handle(),
             show_reset_confirm: false,
+            mode: AppMode::Interactive,
+            camera_frame: None,
+        };
+
+        Scanner::start(
+            cx.entity().downgrade(),
+            cx,
+            |v| v.mode,
+            |v, data, cx| v.handle_input(data, cx),
+            |v, frame, cx| {
+                v.camera_frame = Some(frame);
+                cx.notify();
+            },
+        );
+        view
+    }
+
+    fn set_mode(&mut self, mode: AppMode, cx: &mut Context<Self>) {
+        self.mode = mode;
+        if mode == AppMode::Manual {
+            self.camera_frame = None;
         }
+        cx.notify();
     }
 
     fn beep_ok(&self) {
-        print!("\x07"); // System bell
+        print!("\x07");
     }
 
     fn beep_error(&self) {
-        // Double beep for error/dupe
         print!("\x07");
         std::thread::sleep(std::time::Duration::from_millis(100));
         print!("\x07");
@@ -95,83 +122,118 @@ impl Render for CardCounter {
             None => ("PRÊT", rgb(0x888888), rgb(0x1a1a1a)),
         };
 
-        let focus_handle = self.focus_handle.clone();
-
         div()
             .flex()
             .flex_col()
-            .items_center()
-            .justify_center()
             .size_full()
             .bg(bg_color)
             .relative()
-            .on_key_down(cx.listener(
-                |view: &mut Self,
-                 event: &KeyDownEvent,
-                 _window: &mut Window,
-                 cx: &mut Context<Self>| {
-                    view.handle_input(&event.keystroke.key, cx);
-                },
-            ))
-            .track_focus(&focus_handle)
+            .on_key_down(cx.listener(|view, event: &KeyDownEvent, _window, cx| {
+                view.handle_input(&event.keystroke.key, cx);
+            }))
+            .track_focus(&self.focus_handle)
             .child(
                 div()
-                    .text_2xl()
-                    .font_weight(FontWeight::BOLD)
-                    .child(status)
-                    .text_color(color),
-            )
-            .child(
-                div()
-                    .mt_12()
-                    .text_2xl()
-                    .font_weight(FontWeight::MEDIUM)
-                    .text_color(rgb(0xffffff))
-                    .bg(rgb(0x000000))
-                    .px_8()
-                    .py_4()
-                    .rounded_xl()
-                    .child(self.last_code.clone()),
-            )
-            .child(
-                div()
-                    .mt_16()
                     .flex()
-                    .gap_4()
-                    .child(div().text_xl().text_color(rgb(0xcccccc)).child("Saisie:"))
+                    .justify_between()
+                    .items_center()
+                    .w_full()
+                    .p_4()
+                    .bg(rgb(0x000000))
                     .child(
                         div()
-                            .text_2xl()
-                            .text_color(rgb(0xffffff))
-                            .font_weight(FontWeight::BOLD)
-                            .child(self.current_input.clone()),
+                            .flex()
+                            .gap_4()
+                            .child(
+                                div()
+                                    .px_4()
+                                    .py_2()
+                                    .rounded_lg()
+                                    .bg(if self.mode == AppMode::Manual { rgb(0x444444) } else { rgb(0x1e1e1e) })
+                                    .text_color(rgb(0xffffff))
+                                    .on_mouse_down(MouseButton::Left, cx.listener(|this, _, _, cx| {
+                                        this.set_mode(AppMode::Manual, cx);
+                                    }))
+                                    .child("⌨️ CLAVIER"),
+                            )
+                            .child(
+                                div()
+                                    .px_4()
+                                    .py_2()
+                                    .rounded_lg()
+                                    .bg(if self.mode == AppMode::Interactive { rgb(0x444444) } else { rgb(0x1e1e1e) })
+                                    .text_color(rgb(0xffffff))
+                                    .on_mouse_down(MouseButton::Left, cx.listener(|this, _, _, cx| {
+                                        this.set_mode(AppMode::Interactive, cx);
+                                    }))
+                                    .child("📷 WEBCAM"),
+                            ),
                     ),
             )
             .child(
                 div()
-                    .absolute()
-                    .bottom_8()
                     .flex()
+                    .flex_grow()
                     .flex_col()
                     .items_center()
-                    .gap_4()
+                    .justify_center()
+                    .w_full()
+                    .child(div().text_3xl().font_weight(FontWeight::BOLD).child(status).text_color(color))
                     .child(
                         div()
-                            .text_sm()
-                            .text_color(rgb(0x888888))
-                            .child("ATTENTE SCAN (6 CHIFFRES) | VERIFIEZ NUMLOCK"),
+                            .mt_8()
+                            .text_3xl()
+                            .text_color(rgb(0xffffff))
+                            .bg(rgb(0x000000))
+                            .px_10()
+                            .py_6()
+                            .rounded_xl()
+                            .child(self.last_code.clone()),
                     )
+                    .when(self.mode == AppMode::Interactive, |parent| {
+                        parent.child(
+                            div()
+                                .mt_8()
+                                .size_64()
+                                .bg(rgb(0x000000))
+                                .rounded_lg()
+                                .overflow_hidden()
+                                .child(match &self.camera_frame {
+                                    Some(src) => div().size_full().child(img(src.clone()).size_full()),
+                                    None => div()
+                                        .size_full()
+                                        .flex()
+                                        .items_center()
+                                        .justify_center()
+                                        .text_color(rgb(0x888888))
+                                        .child("Caméra..."),
+                                }),
+                        )
+                    })
+                    .when(self.mode == AppMode::Manual, |parent| {
+                        parent.child(
+                            div()
+                                .mt_12()
+                                .flex()
+                                .gap_4()
+                                .child(div().text_2xl().text_color(rgb(0xcccccc)).child("Saisie:"))
+                                .child(div().text_2xl().text_color(rgb(0xffffff)).child(self.current_input.clone())),
+                        )
+                    }),
+            )
+            .child(
+                div()
+                    .absolute()
+                    .bottom_4()
+                    .right_4()
                     .child(
                         div()
                             .px_4()
                             .py_2()
-                            .bg(rgb(0x333333))
-                            .rounded_md()
-                            .cursor_pointer()
-                            .on_mouse_down(
-                                MouseButton::Left,
-                                cx.listener(Self::toggle_reset_confirm),
-                            )
+                            .bg(rgb(0x1a1a1a))
+                            .text_color(rgb(0xff4444))
+                            .rounded_lg()
+                            .on_mouse_down(MouseButton::Left, cx.listener(Self::toggle_reset_confirm))
                             .child("RESET DATA"),
                     ),
             )
@@ -180,7 +242,7 @@ impl Render for CardCounter {
                     div()
                         .absolute()
                         .size_full()
-                        .bg(rgba(0x000000aa))
+                        .bg(rgba(0x000000))
                         .flex()
                         .flex_col()
                         .items_center()
@@ -190,8 +252,6 @@ impl Render for CardCounter {
                                 .bg(rgb(0x222222))
                                 .p_8()
                                 .rounded_xl()
-                                .border_1()
-                                .border_color(rgb(0x444444))
                                 .flex()
                                 .flex_col()
                                 .items_center()
@@ -207,12 +267,8 @@ impl Render for CardCounter {
                                                 .py_2()
                                                 .bg(rgb(0xbb2222))
                                                 .rounded_md()
-                                                .cursor_pointer()
-                                                .on_mouse_down(
-                                                    MouseButton::Left,
-                                                    cx.listener(Self::confirm_reset),
-                                                )
-                                                .child("OUI, TOUT EFFACER"),
+                                                .on_mouse_down(MouseButton::Left, cx.listener(Self::confirm_reset))
+                                                .child("OUI"),
                                         )
                                         .child(
                                             div()
@@ -220,12 +276,8 @@ impl Render for CardCounter {
                                                 .py_2()
                                                 .bg(rgb(0x444444))
                                                 .rounded_md()
-                                                .cursor_pointer()
-                                                .on_mouse_down(
-                                                    MouseButton::Left,
-                                                    cx.listener(Self::toggle_reset_confirm),
-                                                )
-                                                .child("ANNULER"),
+                                                .on_mouse_down(MouseButton::Left, cx.listener(Self::toggle_reset_confirm))
+                                                .child("NON"),
                                         ),
                                 ),
                         ),
