@@ -1,0 +1,53 @@
+name: Release
+
+on:
+    push:
+        tags:
+            - "v*"
+    workflow_dispatch:
+
+jobs:
+    build:
+        name: Build (${{ matrix.os }})
+        runs-on: ${{ matrix.os }}
+        strategy:
+            matrix:
+                os: [ubuntu-latest, windows-latest]
+
+        steps:
+            - uses: actions/checkout@v4
+
+            - name: Install Rust
+              uses: dtolnay/rust-toolchain@stable
+
+            - name: Install Dependencies (Linux)
+              if: matrix.os == 'ubuntu-latest'
+              run: |
+                  sudo apt-get update
+                  sudo apt-get install -y libwayland-dev libx11-dev libvulkan1 libvulkan-dev libfontconfig1-dev libdbus-1-dev libssl-dev
+
+            - name: Build Release
+              run: cargo build --release
+              working-directory: card-counter
+
+            - name: Prepare Artifacts (Linux)
+              if: matrix.os == 'ubuntu-latest'
+              run: |
+                  cd card-counter/target/release
+                  tar -czvf ../../../card-counter-linux.tar.gz card-counter
+
+            - name: Prepare Artifacts (Windows)
+              if: matrix.os == 'windows-latest'
+              run: |
+                  cd card-counter/target/release
+                  compress-archive -Path card-counter.exe -DestinationPath ../../../card-counter-windows.zip
+
+            - name: Create Release
+              uses: softprops/action-gh-release@v1
+              if: startsWith(github.ref, 'refs/tags/')
+              with:
+                  files: |
+                      card-counter-linux.tar.gz
+                      card-counter-windows.zip
+              env:
+                  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
