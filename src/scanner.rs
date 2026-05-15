@@ -2,7 +2,7 @@ use gpui::*;
 use rxing::{common::HybridBinarizer, BinaryBitmap, MultiUseMultiFormatReader, Reader, DecodingHintDictionary, DecodeHintValue, DecodeHintType, BarcodeFormat};
 use nokhwa::pixel_format::RgbFormat;
 use std::collections::HashSet;
-use nokhwa::utils::{CameraIndex, RequestedFormat, RequestedFormatType};
+use nokhwa::utils::{CameraIndex, ControlValueSetter, KnownCameraControl, RequestedFormat, RequestedFormatType};
 use nokhwa::Camera;
 use std::sync::Arc;
 use crate::types::{AppMode, ScanThrottle};
@@ -66,6 +66,25 @@ impl Scanner {
                     return;
                 }
                 println!("[SCANNER] Stream ouvert ! La LED de la caméra devrait s'allumer.");
+
+                // Tentative d'activation de l'Autofocus
+                match camera.camera_controls() {
+                    Ok(controls) => {
+                        for control in controls {
+                            if control.control() == nokhwa::utils::KnownCameraControl::Focus {
+                                println!("[SCANNER] Contrôle de focus trouvé. Tentative d'activation de l'autofocus...");
+                                let mut auto_focus = control.clone();
+                                // On tente d'activer le flag manuel si déjà présent ou auto
+                                if let Err(e) = camera.set_camera_control(KnownCameraControl::Focus, ControlValueSetter::None) {
+                                    println!("[SCANNER] Échec activation autofocus: {:?}", e);
+                                } else {
+                                    println!("[SCANNER] Autofocus activé (si supporté par le driver).");
+                                }
+                            }
+                        }
+                    }
+                    Err(e) => println!("[SCANNER] Impossible de lister les contrôles: {:?}", e),
+                }
 
                 let mut frame_count = 0u64;
                 let mut last_fps_check = Instant::now();
